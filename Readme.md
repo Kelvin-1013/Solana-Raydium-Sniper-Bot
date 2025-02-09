@@ -1,4 +1,4 @@
-# Solana Trading Bot
+# Solana Raydium Sniper Bot
 
 A Rust-based trading bot for Solana blockchain that monitors and executes trades based on specified target prices.
 
