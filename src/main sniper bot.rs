@@ -818,7 +818,64 @@ async fn main() -> Result<()> {
     let mint = env::var("MINT_ADDRESS")?;
 
     loop {
-       get_pool_price(Some(&pool_id), None).await {
+        match swap(
+            Some(&pool_id),
+            wallet.clone(),
+            &mint,
+            swap_amount,
+            SwapDirection::Sell,
+            SwapInType::Pct,
+            10,
+            false
+        ).await {
+        //     Ok(signatures) => {
+        //         println!("Swap initiated. Waiting for confirmation...");
+                
+        //         // Wait for each transaction to confirm
+        //         for signature in signatures {
+        //             let sig = Signature::from_str(&signature)?;
+        //             if rpc_client.confirm_transaction(&sig)? {
+        //                 match rpc_client.get_signature_status(&sig) {
+        //                     Ok(status) => {
+        //                         if status.is_none() {
+        //                             println!("Swap transaction {} confirmed successfully!", signature);
+        //                         } else {
+        //                             error!("Swap transaction {} failed with error: {:?}", signature, status);
+        //                             continue;
+        //                         }
+        //                     }
+        //                     _ => {
+        //                         error!("Failed to get transaction status for {}", signature);
+        //                         continue;
+        //                     }
+        //                 }
+        //             } else {
+        //                 error!("Failed to confirm transaction {}", signature);
+        //                 continue;
+        //             }
+        //         }
+                
+        //         // Optional: Verify the token balance is now 0
+        //         let token_ata = get_associated_token_address(&wallet.pubkey(), &Pubkey::from_str(&mint)?);
+        //         match rpc_client.get_token_account_balance(&token_ata) {
+        //             Ok(balance) => {
+        //                 if balance.amount == "0" {
+        //                     println!("Swap completed successfully! Token balance is now 0");
+        //                     break;  // Exit the monitoring loop
+        //                 } else {
+        //                     println!("Warning: Token balance is not 0 after swap: {}", balance.amount);
+        //                 }
+        //             }
+        //             Err(e) => {
+        //                 error!("Failed to check final token balance: {}", e);
+        //             }
+        //         }
+        //     }
+        //     Err(e) => {
+        //         error!("Failed to initiate swap: {}", e);
+        //     }
+        // }
+        match get_pool_price(Some(&pool_id), None).await {
             Ok((_base_amount, _quote_amount, current_price)) => {
                 println!("Current price: {} SOL", current_price);
                 
