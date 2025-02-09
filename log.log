@@ -1,0 +1,18 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running `target/debug/raytx`
+Get Pool Price ...
+calculate pool[Bb5dXLex6oPhmsUs7BNAqrjv5bohCySgJpoCWHTdrWnu]: AfuPK6kk3Y2ZWWouZMjFopVs2yF3qmEWHiuU3HHYpump: 919302646.068898, So11111111111111111111111111111111111111112: 20.000712028, price: 0.000000021756395582593622 sol
+Current price: 0.000000021756395582593622 SOL
+Current price is below the target price of 0.000001 SOL
+Get Pool Price ...
+calculate pool[Bb5dXLex6oPhmsUs7BNAqrjv5bohCySgJpoCWHTdrWnu]: AfuPK6kk3Y2ZWWouZMjFopVs2yF3qmEWHiuU3HHYpump: 919302646.068898, So11111111111111111111111111111111111111112: 20.000712028, price: 0.000000021756395582593622 sol
+Current price: 0.000000021756395582593622 SOL
+Current price is below the target price of 0.000001 SOL
+Get Pool Price ...
+calculate pool[Bb5dXLex6oPhmsUs7BNAqrjv5bohCySgJpoCWHTdrWnu]: AfuPK6kk3Y2ZWWouZMjFopVs2yF3qmEWHiuU3HHYpump: 919302646.068898, So11111111111111111111111111111111111111112: 20.000712028, price: 0.000000021756395582593622 sol
+Current price: 0.000000021756395582593622 SOL
+Current price is below the target price of 0.000001 SOL
+Get Pool Price ...
+calculate pool[Bb5dXLex6oPhmsUs7BNAqrjv5bohCySgJpoCWHTdrWnu]: AfuPK6kk3Y2ZWWouZMjFopVs2yF3qmEWHiuU3HHYpump: 919302646.068898, So11111111111111111111111111111111111111112: 20.000712028, price: 0.000000021756395582593622 sol
+Current price: 0.000000021756395582593622 SOL
+Current price is below the target price of 0.000001 SOL
