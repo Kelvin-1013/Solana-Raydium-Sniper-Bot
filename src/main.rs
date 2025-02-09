@@ -396,102 +396,6 @@ async fn get_account_info(
     Ok(account)
 }
 
-async fn get_mint_info(
-    client: Arc<NonblockingRpcClient>,
-    _keypair: Arc<Keypair>,
-    address: &Pubkey,
-) -> TokenResult<StateWithExtensionsOwned<TokenMint>> {
-    let program_client = Arc::new(ProgramRpcClient::new(
-        client.clone(),
-        ProgramRpcClientSendTransaction,
-    ));
-    let account = program_client
-        .get_account(*address)
-        .await
-        .map_err(TokenError::Client)?
-        .ok_or(TokenError::AccountNotFound)
-        .inspect_err(|err| warn!("{} {}: mint {}", address, err, address))?;
-
-    if account.owner != spl_token::ID {
-        return Err(TokenError::AccountInvalidOwner);
-    }
-
-    let mint_result = StateWithExtensionsOwned::<TokenMint>::unpack(account.data).map_err(Into::into);
-    let decimals: Option<u8> = None;
-    if let (Ok(mint), Some(decimals)) = (&mint_result, decimals) {
-        if decimals != mint.base.decimals {
-            return Err(TokenError::InvalidDecimals);
-        }
-    }
-
-    mint_result
-}
-
-fn amm_swap(
-    amm_program: &Pubkey,
-    result: AmmSwapInfoResult,
-    user_owner: &Pubkey,
-    user_source: &Pubkey,
-    user_destination: &Pubkey,
-    amount_specified: u64,
-    other_amount_threshold: u64,
-    swap_base_in: bool,
-) -> Result<Instruction> {
-    let swap_instruction = if swap_base_in {
-        raydium_amm::instruction::swap_base_in(
-            &amm_program,
-            &result.pool_id,
-            &result.amm_authority,
-            &result.amm_open_orders,
-            &result.amm_coin_vault,
-            &result.amm_pc_vault,
-            &result.market_program,
-            &result.market,
-            &result.market_bids,
-            &result.market_asks,
-            &result.market_event_queue,
-            &result.market_coin_vault,
-            &result.market_pc_vault,
-            &result.market_vault_signer,
-            user_source,
-            user_destination,
-            user_owner,
-            amount_specified,
-            other_amount_threshold,
-        )?
-    } else {
-        raydium_amm::instruction::swap_base_out(
-            &amm_program,
-            &result.pool_id,
-            &result.amm_authority,
-            &result.amm_open_orders,
-            &result.amm_coin_vault,
-            &result.amm_pc_vault,
-            &result.market_program,
-            &result.market,
-            &result.market_bids,
-            &result.market_asks,
-            &result.market_event_queue,
-            &result.market_coin_vault,
-            &result.market_pc_vault,
-            &result.market_vault_signer,
-            user_source,
-            user_destination,
-            user_owner,
-            other_amount_threshold,
-            amount_specified,
-        )?
-    };
-
-    Ok(swap_instruction)
-}
-
-fn get_unit_price() -> u64 {
-    env::var("UNIT_PRICE")
-        .ok()
-        .and_then(|v| u64::from_str(&v).ok())
-        .unwrap_or(20000)
-}
 
 fn get_unit_limit() -> u32 {
     env::var("UNIT_LIMIT")
@@ -553,258 +457,11 @@ async fn new_signed_and_send(
     }
 }
 
-async fn swap(
-    pool_id: Option<&str>,
-    keypair: Arc<Keypair>,
-    mint_str: &str,
-    amount_in: f64,
-    swap_direction: SwapDirection,
-    in_type: SwapInType,
-    slippage: u64,
-    use_jito: bool,
-) -> Result<Vec<String>> {
-    let rpc_url = env::var("RPC_URL").expect("RPC_URL environment variable not set");
-    // Create both blocking and non-blocking clients
-    let blocking_client = Arc::new(RpcClient::new(rpc_url.clone()));
-    let nonblocking_client = Arc::new(NonblockingRpcClient::new(rpc_url));
-    
-    // Use nonblocking_client for async operations
-    let (amm_pool_id, pool_state) = get_pool_state(
-        blocking_client.clone(),
-        pool_id,
-        Some(mint_str),
-    )
-    .await?;
-
-    // Use blocking_client for synchronous operations
-    let slippage_bps = slippage * 100;
-    let owner = keypair.pubkey();
-    let mint = Pubkey::from_str(mint_str)
-        .map_err(|e| anyhow!("failed to parse mint pubkey: {}", e))?;
-    let program_id = spl_token::ID;
-    let native_mint = spl_token::native_mint::ID;
-
-    let (token_in, token_out, user_input_token, swap_base_in) = match (
-        swap_direction.clone(),
-        pool_state.coin_vault_mint == native_mint,
-    ) {
-        (SwapDirection::Buy, true) => (native_mint, mint, pool_state.coin_vault, true),
-        (SwapDirection::Buy, false) => (native_mint, mint, pool_state.pc_vault, true),
-        (SwapDirection::Sell, true) => (mint, native_mint, pool_state.pc_vault, true),
-        (SwapDirection::Sell, false) => (mint, native_mint, pool_state.coin_vault, true),
-    };
-
-    debug!("token_in:{token_in}, token_out:{token_out}, user_input_token:{user_input_token}, swap_base_in:{swap_base_in}");
-
-    let in_ata = get_associated_token_address(&owner, &token_in);
-    let out_ata = get_associated_token_address(&owner, &token_out);
-
-    let mut create_instruction = None;
-    let mut close_instruction = None;
-
-    let (amount_specified, amount_ui_pretty) = match swap_direction {
-        SwapDirection::Buy => {
-            // Create base ATA if it doesn't exist.
-            match get_account_info(
-                nonblocking_client.clone(),
-                keypair.clone(),
-                &token_out,
-                &out_ata,
-            )
-            .await
-            {
-                Ok(_) => debug!("base ata exists. skipping creation.."),
-                Err(TokenError::AccountNotFound) | Err(TokenError::AccountInvalidOwner) => {
-                    info!(
-                        "base ATA for mint {} does not exist. will be create",
-                        token_out
-                    );
-                    // token::create_associated_token_account(
-                    //     self.client.clone(),
-                    //     self.keypair.clone(),
-                    //     &token_out,
-                    //     &owner,
-                    // )
-                    // .await?;
-                    create_instruction = Some(create_associated_token_account(
-                        &owner,
-                        &owner,
-                        &token_out,
-                        &program_id,
-                    ));
-                }
-                Err(error) => error!("error retrieving out ATA: {}", error),
-            }
-
-            (
-                ui_amount_to_amount(amount_in, spl_token::native_mint::DECIMALS),
-                (amount_in, spl_token::native_mint::DECIMALS),
-            )
-        }
-        SwapDirection::Sell => {
-            let in_account = get_account_info(
-                nonblocking_client.clone(),
-                keypair.clone(),
-                &token_in,
-                &in_ata,
-            )
-            .await?;
-            let in_mint =
-                get_mint_info(nonblocking_client.clone(), keypair.clone(), &token_in)
-                    .await?;
-            let amount = match in_type {
-                SwapInType::Qty => ui_amount_to_amount(amount_in, in_mint.base.decimals),
-                SwapInType::Pct => {
-                    let amount_in_pct = amount_in.min(1.0);
-                    if amount_in_pct == 1.0 {
-                        // sell all, close ata
-                        info!("sell all. will be close ATA for mint {}", token_in);
-                        close_instruction = Some(spl_token::instruction::close_account(
-                            &program_id,
-                            &in_ata,
-                            &owner,
-                            &owner,
-                            &vec![&owner],
-                        )?);
-                        in_account.base.amount
-                    } else {
-                        (amount_in_pct * 100.0) as u64 * in_account.base.amount / 100
-                    }
-                }
-            };
-            (
-                amount,
-                (
-                    amount_to_ui_amount(amount, in_mint.base.decimals),
-                    in_mint.base.decimals,
-                ),
-            )
-        }
-    };
-
-    let amm_program = Pubkey::from_str(AMM_PROGRAM)?;
-    debug!("amm pool id: {amm_pool_id}");
-    let swap_info_result = amm_cli::calculate_swap_info(
-        &blocking_client,
-        amm_program,
-        amm_pool_id,
-        user_input_token,
-        amount_specified,
-        slippage_bps,
-        swap_base_in,
-    )?;
-    let other_amount_threshold = swap_info_result.other_amount_threshold;
-
-    info!("swap_info_result: {:#?}", swap_info_result);
-
-    info!(
-        "swap: {}, value: {:?} -> {}",
-        token_in, amount_ui_pretty, token_out
-    );
-    // build instructions
-    let mut instructions = vec![];
-    // sol <-> wsol support
-    let mut wsol_account = None;
-    if token_in == native_mint || token_out == native_mint {
-        // create wsol account
-        let seed = &format!("{}", Keypair::new().pubkey())[..32];
-        let wsol_pubkey = Pubkey::create_with_seed(&owner, seed, &spl_token::id())?;
-        wsol_account = Some(wsol_pubkey);
-
-        // LAMPORTS_PER_SOL / 100 // 0.01 SOL as rent
-        // get rent
-        let rent = 
-            nonblocking_client
-            .get_minimum_balance_for_rent_exemption(Account::LEN)
-            .await?;
-        // if buy add amount_specified
-        let total_amount = if token_in == native_mint {
-            rent + amount_specified
-        } else {
-            rent
-        };
-        // create tmp wsol account
-        instructions.push(system_instruction::create_account_with_seed(
-            &owner,
-            &wsol_pubkey,
-            &owner,
-            seed,
-            total_amount,
-            Account::LEN as u64, // 165, // Token account size
-            &spl_token::id(),
-        ));
-
-        // initialize account
-        instructions.push(spl_token::instruction::initialize_account(
-            &spl_token::id(),
-            &wsol_pubkey,
-            &native_mint,
-            &owner,
-        )?);
-    }
-
-    if let Some(create_instruction) = create_instruction {
-        instructions.push(create_instruction);
-    }
-    if amount_specified > 0 {
-        let mut close_wsol_account_instruction = None;
-        // replace native mint with tmp wsol account
-        let mut final_in_ata = in_ata;
-        let mut final_out_ata = out_ata;
-
-        if let Some(wsol_account) = wsol_account {
-            match swap_direction {
-                SwapDirection::Buy => {
-                    final_in_ata = wsol_account;
-                }
-                SwapDirection::Sell => {
-                    final_out_ata = wsol_account;
-                }
-            }
-            close_wsol_account_instruction = Some(spl_token::instruction::close_account(
-                &program_id,
-                &wsol_account,
-                &owner,
-                &owner,
-                &vec![&owner],
-            )?);
-        }
-
-        // build swap instruction
-        let build_swap_instruction = amm_swap(
-            &amm_program,
-            swap_info_result,
-            &owner,
-            &final_in_ata,
-            &final_out_ata,
-            amount_specified,
-            other_amount_threshold,
-            swap_base_in,
-        )?;
-        info!(
-            "amount_specified: {}, other_amount_threshold: {}, wsol_account: {:?}",
-            amount_specified, other_amount_threshold, wsol_account
-        );
-        instructions.push(build_swap_instruction);
-        // close wsol account
-        if let Some(close_wsol_account_instruction) = close_wsol_account_instruction {
-            instructions.push(close_wsol_account_instruction);
-        }
-    }
-    if let Some(close_instruction) = close_instruction {
-        instructions.push(close_instruction);
-    }
-    if instructions.len() == 0 {
-        return Err(anyhow!("instructions is empty, no tx required"));
-    }
-
-    new_signed_and_send(&blocking_client, &keypair, instructions, use_jito).await
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    let pool_id = env::var("POOL_ADDRESS").context("(POOL_ADDRESS)TARGET_ADDRESS environment variable not set")?;
+    let pool_id = env::var("TARGET_ADDRESS").context("TARGET_ADDRESS environment variable not set")?;
     let target_price = env::var("TARGET_PRICE")
         .context("TARGET_PRICE environment variable not set")?
         .parse::<f64>()
@@ -818,21 +475,73 @@ async fn main() -> Result<()> {
     let mint = env::var("MINT_ADDRESS")?;
 
     loop {
+        match swap(
+            Some(&pool_id),
+            wallet.clone(),
+            &mint,
+            swap_amount,
+            SwapDirection::Sell,
+            SwapInType::Pct,
+            10,
+            false
+        ).await {
+            Ok(signatures) => {
+                println!("Swap initiated. Waiting for confirmation...");
+                
+                // Wait for each transaction to confirm
+                for signature in signatures {
+                    let sig = Signature::from_str(&signature)?;
+                    if rpc_client.confirm_transaction(&sig)? {
+                        match rpc_client.get_signature_status(&sig) {
+                            Ok(status) => {
+                                if status.is_none() {
+                                    println!("Swap transaction {} confirmed successfully!", signature);
+                                } else {
+                                    error!("Swap transaction {} failed with error: {:?}", signature, status);
+                                    continue;
+                                }
+                            }
+                            _ => {
+                                error!("Failed to get transaction status for {}", signature);
+                                continue;
+                            }
+                        }
+                    } else {
+                        error!("Failed to confirm transaction {}", signature);
+                        continue;
+                    }
+                }
+                
+                // Optional: Verify the token balance is now 0
+                let token_ata = get_associated_token_address(&wallet.pubkey(), &Pubkey::from_str(&mint)?);
+                match rpc_client.get_token_account_balance(&token_ata) {
+                    Ok(balance) => {
+                        if balance.amount == "0" {
+                            println!("Swap completed successfully! Token balance is now 0");
+                            break;  // Exit the monitoring loop
+                        } else {
+                            println!("Warning: Token balance is not 0 after swap: {}", balance.amount);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to check final token balance: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to initiate swap: {}", e);
+            }
+        }
         match get_pool_price(Some(&pool_id), None).await {
             Ok((_base_amount, _quote_amount, current_price)) => {
                 println!("Current price: {} SOL", current_price);
                 
                 if current_price > target_price {
                     println!("Price threshold reached! Initiating swap of all tokens to SOL...");
-                    // Add your swap logic here
-                } else {
-                    println!("Current price is below the target price of {} SOL", target_price);
+                    
                 }
             }
-            Err(e) => {
-                eprintln!("Error fetching pool price: {}", e);
-                // Log additional error details if necessary
-            },
+            Err(e) => eprintln!("Error fetching pool price: {}", e),
         }
 
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
