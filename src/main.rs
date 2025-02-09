@@ -818,16 +818,21 @@ async fn main() -> Result<()> {
     let mint = env::var("MINT_ADDRESS")?;
 
     loop {
-       get_pool_price(Some(&pool_id), None).await {
+        match get_pool_price(Some(&pool_id), None).await {
             Ok((_base_amount, _quote_amount, current_price)) => {
                 println!("Current price: {} SOL", current_price);
                 
                 if current_price > target_price {
                     println!("Price threshold reached! Initiating swap of all tokens to SOL...");
-                    
+                    // Add your swap logic here
+                } else {
+                    println!("Current price is below the target price of {} SOL", target_price);
                 }
             }
-            Err(e) => eprintln!("Error fetching pool price: {}", e),
+            Err(e) => {
+                eprintln!("Error fetching pool price: {}", e);
+                // Log additional error details if necessary
+            },
         }
 
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
