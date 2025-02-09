@@ -804,7 +804,7 @@ async fn swap(
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
-    let pool_id = env::var("TARGET_ADDRESS").context("TARGET_ADDRESS environment variable not set")?;
+    let pool_id = env::var("POOL_ADDRESS").context("(POOL_ADDRESS)TARGET_ADDRESS environment variable not set")?;
     let target_price = env::var("TARGET_PRICE")
         .context("TARGET_PRICE environment variable not set")?
         .parse::<f64>()
